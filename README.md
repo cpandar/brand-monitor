@@ -1,9 +1,10 @@
-# brand-signal-visualizer
+# brand-monitor
 
-Real-time browser-based signal visualization node for [BRAND](https://github.com/brandbci/brand) graphs.
+Real-time browser-based monitoring dashboard for [BRAND](https://github.com/brandbci/brand) graphs.
 
 Runs as a standard BRAND graph node. Open `http://localhost:8765` in any browser while
-a graph is running to monitor live signals without adding meaningful overhead to the graph.
+a graph is running to monitor live signals and inspect graph structure without adding
+meaningful overhead to the graph.
 
 ## Quick start
 
@@ -13,7 +14,7 @@ a graph is running to monitor live signals without adding meaningful overhead to
 nodes:
   - name: signal_visualizer
     nickname: signal_visualizer
-    module: ../brand-modules/brand-signal-visualizer
+    module: ../brand-modules/brand-monitor
     run_priority: 10
     parameters:
       port: 8765

@@ -1,8 +1,8 @@
-# brand-signal-visualizer — Design Document
+# brand-monitor — Design Document
 
 ## Overview
 
-`brand-signal-visualizer` is a BRAND graph node that provides real-time browser-based
+`brand-monitor` is a BRAND graph node that provides real-time browser-based
 visualization of signals flowing through a BRAND graph. It runs as a standard node
 alongside other graph nodes, reads from Redis streams, and serves a React/TypeScript
 dashboard accessible at a localhost URL. Users can add multiple signal viewers,
@@ -37,7 +37,7 @@ flowchart TB
         R[(Redis Streams)]
     end
 
-    subgraph viz["brand-signal-visualizer node"]
+    subgraph viz["brand-monitor node"]
         R -->|"XREAD poll @ ~60 Hz\n(all active streams, one call)"| PY["Python Node\nFastAPI + asyncio"]
         PY -->|"HTTP — serves static files"| FE["React/TypeScript\nFrontend Build"]
         PY <-->|WebSocket| BR["Browser Dashboard"]
@@ -93,7 +93,7 @@ instead of the default `sys.exit(0)` which causes SIGKILL from the BRAND supervi
 ```yaml
 - name: signal_visualizer
   nickname: signal_visualizer
-  module: ../brand-modules/brand-signal-visualizer
+  module: ../brand-modules/brand-monitor
   run_priority: 10          # deliberately low — not a real-time node
   parameters:
     port: 8765
@@ -259,7 +259,7 @@ The display node is designed to be a **rate-limited passive observer**:
 - macOS + Linux support
 - Pre-built React bundle committed to repo (`nodes/signal_visualizer/static/`)
 - SIGINT clean shutdown (no SIGKILL from supervisor)
-- Added as a git submodule in `brand-tutorial/brand-modules/brand-signal-visualizer`
+- Added as a git submodule in `brand-tutorial/brand-modules/brand-monitor`
 - Environment YAML dependencies: `fastapi>=0.100.0`, `uvicorn[standard]>=0.23.0`
 - Shell launcher `.bin` file (skips Cython compilation step)
 
