@@ -20,19 +20,22 @@ export function App() {
   function handleAddViewer(partial: Omit<ViewerConfig, 'id'>) {
     const config: ViewerConfig = { ...partial, id: String(nextId++) }
     setViewers(v => [...v, config])
-    send({ type: 'subscribe', stream: config.stream, field: config.field })
+    const allFields = [config.field, ...(config.extraFields ?? [])]
+    allFields.forEach(f => send({ type: 'subscribe', stream: config.stream, field: f }))
   }
 
   function handleRemoveViewer(id: string) {
     const viewer = viewers.find(v => v.id === id)
     if (viewer) {
-      const others      = viewers.filter(v => v.id !== id)
-      const stillNeeded = others.some(
-        v => v.stream === viewer.stream && v.field === viewer.field
-      )
-      if (!stillNeeded) {
-        send({ type: 'unsubscribe', stream: viewer.stream, field: viewer.field })
-      }
+      const others    = viewers.filter(v => v.id !== id)
+      const allFields = [viewer.field, ...(viewer.extraFields ?? [])]
+      allFields.forEach(f => {
+        const stillNeeded = others.some(
+          v => v.stream === viewer.stream &&
+               [v.field, ...(v.extraFields ?? [])].includes(f)
+        )
+        if (!stillNeeded) send({ type: 'unsubscribe', stream: viewer.stream, field: f })
+      })
     }
     setViewers(v => v.filter(v => v.id !== id))
   }

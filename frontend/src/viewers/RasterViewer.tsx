@@ -10,43 +10,43 @@ interface RasterEvent {
 
 interface Props {
   config: ViewerConfig
-  latestBatch: DataBatch | null
+  registerDataHandler: (stream: string, field: string, handler: (batch: DataBatch) => void) => () => void
   windowSecs: number
 }
 
-export function RasterViewer({ config, latestBatch, windowSecs }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const eventsRef = useRef<RasterEvent[]>([])
+export function RasterViewer({ config, registerDataHandler, windowSecs }: Props) {
+  const canvasRef    = useRef<HTMLCanvasElement>(null)
+  const eventsRef    = useRef<RasterEvent[]>([])
   const animFrameRef = useRef<number>(0)
-  const windowSecsRef = useRef<number>(windowSecs)
+  const windowSecsRef = useRef(windowSecs)
   windowSecsRef.current = windowSecs
 
-  const nChannels = config.fieldInfo.n_channels
+  const nChannels   = config.fieldInfo.n_channels
   const canvasHeight = Math.max(80, nChannels * ROW_HEIGHT)
 
-  // Ingest new events
+  // Register data handler directly — no React state intermediary, so no batches are dropped
   useEffect(() => {
-    if (!latestBatch) return
+    return registerDataHandler(config.stream, config.field, (batch) => {
+      const events  = eventsRef.current
+      const winS    = windowSecsRef.current
 
-    const events = eventsRef.current
-
-    for (let s = 0; s < latestBatch.nSamples; s++) {
-      const ts = latestBatch.timestamps[s]
-      for (let ch = 0; ch < latestBatch.nChannels; ch++) {
-        const val = latestBatch.data[ch * latestBatch.nSamples + s]
-        if (val !== 0) {
-          events.push({ ts, ch })
+      for (let s = 0; s < batch.nSamples; s++) {
+        const ts = batch.timestamps[s]
+        for (let ch = 0; ch < batch.nChannels; ch++) {
+          if (batch.data[ch * batch.nSamples + s] !== 0) {
+            events.push({ ts, ch })
+          }
         }
       }
-    }
 
-    // Trim old events beyond current window
-    const now = latestBatch.timestamps[latestBatch.timestamps.length - 1]
-    const cutoff = now - windowSecsRef.current
-    let i = 0
-    while (i < events.length && events[i].ts < cutoff) i++
-    if (i > 0) events.splice(0, i)
-  }, [latestBatch, config.field])
+      // Trim events older than the current window
+      const now    = batch.timestamps[batch.timestamps.length - 1]
+      const cutoff = now - winS
+      let i = 0
+      while (i < events.length && events[i].ts < cutoff) i++
+      if (i > 0) events.splice(0, i)
+    })
+  }, [config.stream, config.field, registerDataHandler])
 
   // Render loop
   useEffect(() => {
@@ -55,10 +55,10 @@ export function RasterViewer({ config, latestBatch, windowSecs }: Props) {
     const ctx = canvas.getContext('2d')!
 
     function render() {
-      const events = eventsRef.current
+      const events  = eventsRef.current
+      const windowS = windowSecsRef.current
       const W = canvas!.width
       const H = canvas!.height
-      const windowS = windowSecsRef.current
 
       ctx.fillStyle = '#181825'
       ctx.fillRect(0, 0, W, H)
@@ -68,7 +68,7 @@ export function RasterViewer({ config, latestBatch, windowSecs }: Props) {
         return
       }
 
-      const now = events[events.length - 1].ts
+      const now    = events[events.length - 1].ts
       const tStart = now - windowS
       const tRange = windowS
 
@@ -79,7 +79,7 @@ export function RasterViewer({ config, latestBatch, windowSecs }: Props) {
         ctx.fillRect(x, y, 2, Math.max(1, ROW_HEIGHT))
       }
 
-      // Channel axis label (every 32 channels)
+      // Channel axis labels (every 32 channels)
       ctx.fillStyle = '#6c7086'
       ctx.font = '9px monospace'
       for (let ch = 0; ch < nChannels; ch += 32) {

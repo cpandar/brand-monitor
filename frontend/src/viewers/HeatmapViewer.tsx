@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { DataBatch, ViewerConfig } from '../types'
 
-const MAX_COLS = 2000
+// Keep up to MAX_BUFFER_SECS of history so expanding the window reveals real past data.
+const MAX_BUFFER_SECS = 60
 
 interface Props {
   config: ViewerConfig
-  latestBatch: DataBatch | null
+  registerDataHandler: (stream: string, field: string, handler: (batch: DataBatch) => void) => () => void
   windowSecs?: number
 }
 
@@ -54,7 +55,7 @@ function buildLUT(stops: [number, number, number, number][]): Uint8Array {
 // Component
 // ---------------------------------------------------------------------------
 
-export function HeatmapViewer({ config, latestBatch, windowSecs = 5 }: Props) {
+export function HeatmapViewer({ config, registerDataHandler, windowSecs = 5 }: Props) {
   const canvasRef    = useRef<HTMLCanvasElement>(null)
   const animFrameRef = useRef<number>(0)
   const [demeaned, setDemeaned] = useState(false)
@@ -66,20 +67,33 @@ export function HeatmapViewer({ config, latestBatch, windowSecs = 5 }: Props) {
   )
 
   // Scale pixels-per-channel so total canvas height ≈ 200 px
-  const pxPerCh     = Math.max(1, Math.min(4, Math.floor(200 / nChannels)))
+  const pxPerCh      = Math.max(1, Math.min(4, Math.floor(200 / nChannels)))
   const canvasHeight = Math.max(80, nChannels * pxPerCh)
+
+  // Hard cap on buffered columns — derived from rate so 60 s always fits
+  const maxCols = Math.max(
+    6000,
+    Math.ceil((config.fieldInfo.approx_rate_hz || 100) * MAX_BUFFER_SECS * 1.5),
+  )
 
   // Data buffer: time-columns + per-channel EMA for demeaning
   const bufRef = useRef<{
-    cols:        Array<{ ts: number; values: Float32Array }>
-    ema:         Float32Array   // per-channel exponential moving average
-    emaReady:    boolean
-    rangeMax:    number         // adaptive max for plasma (raw) mode
-    devMax:      number         // adaptive max absolute deviation (demeaned mode)
-  }>({
-    cols: [], ema: new Float32Array(nChannels),
-    emaReady: false, rangeMax: 1, devMax: 1,
-  })
+    cols:     Array<{ ts: number; values: Float32Array }>
+    ema:      Float32Array
+    emaReady: boolean
+    rangeMax: number
+    devMax:   number
+  }>({ cols: [], ema: new Float32Array(nChannels), emaReady: false, rangeMax: 1, devMax: 1 })
+
+  // Stable refs so the data handler doesn't need to be re-registered on prop changes
+  const windowSecsRef = useRef(windowSecs)
+  windowSecsRef.current = windowSecs
+  const emaAlphaRef = useRef(emaAlpha)
+  emaAlphaRef.current = emaAlpha
+  const nChannelsRef = useRef(nChannels)
+  nChannelsRef.current = nChannels
+  const maxColsRef = useRef(maxCols)
+  maxColsRef.current = maxCols
 
   // Reset buffer when stream/field changes
   useEffect(() => {
@@ -89,59 +103,61 @@ export function HeatmapViewer({ config, latestBatch, windowSecs = 5 }: Props) {
     }
   }, [nChannels, config.stream, config.field])
 
-  // ------------------------------------------------------------------
-  // Ingest new data batches
-  // ------------------------------------------------------------------
+  // Register data handler directly — no React state intermediary, so no batches are dropped
   useEffect(() => {
-    if (!latestBatch || latestBatch.nSamples === 0) return
-    const buf = bufRef.current
+    return registerDataHandler(config.stream, config.field, (batch) => {
+      if (batch.nSamples === 0) return
+      const buf       = bufRef.current
+      const nCh       = nChannelsRef.current
+      const alpha     = emaAlphaRef.current
 
-    // Lazy-initialize EMA to first sample's values to avoid a long transient
-    if (!buf.emaReady) {
-      for (let ch = 0; ch < nChannels && ch < latestBatch.nChannels; ch++) {
-        buf.ema[ch] = Number(latestBatch.data[ch * latestBatch.nSamples])
+      // Lazy-initialize EMA to first sample's values to avoid a long transient
+      if (!buf.emaReady) {
+        for (let ch = 0; ch < nCh && ch < batch.nChannels; ch++) {
+          buf.ema[ch] = Number(batch.data[ch * batch.nSamples])
+        }
+        buf.emaReady = true
       }
-      buf.emaReady = true
-    }
 
-    for (let s = 0; s < latestBatch.nSamples; s++) {
-      const col = new Float32Array(nChannels)
-      for (let ch = 0; ch < nChannels && ch < latestBatch.nChannels; ch++) {
-        const v = Number(latestBatch.data[ch * latestBatch.nSamples + s])
-        // Update EMA
-        buf.ema[ch] += emaAlpha * (v - buf.ema[ch])
-        col[ch] = v
+      for (let s = 0; s < batch.nSamples; s++) {
+        const col = new Float32Array(nCh)
+        for (let ch = 0; ch < nCh && ch < batch.nChannels; ch++) {
+          const v = Number(batch.data[ch * batch.nSamples + s])
+          buf.ema[ch] += alpha * (v - buf.ema[ch])
+          col[ch] = v
+        }
+        buf.cols.push({ ts: batch.timestamps[s], values: col })
       }
-      buf.cols.push({ ts: latestBatch.timestamps[s], values: col })
-    }
 
-    // Trim to windowSecs
-    const now    = latestBatch.timestamps[latestBatch.timestamps.length - 1]
-    const cutoff = now - windowSecs
-    let i = 0
-    while (i < buf.cols.length && buf.cols[i].ts < cutoff) i++
-    if (i > 0) buf.cols.splice(0, i)
-    if (buf.cols.length > MAX_COLS) buf.cols.splice(0, buf.cols.length - MAX_COLS)
+      // Trim to MAX_BUFFER_SECS (not winS) so shrinking/expanding the window
+      // reveals real past data without a gap — same approach as TimeSeriesViewer.
+      const now    = batch.timestamps[batch.timestamps.length - 1]
+      const cutoff = now - MAX_BUFFER_SECS
+      let i = 0
+      while (i < buf.cols.length && buf.cols[i].ts < cutoff) i++
+      if (i > 0) buf.cols.splice(0, i)
+      if (buf.cols.length > maxColsRef.current) buf.cols.splice(0, buf.cols.length - maxColsRef.current)
 
-    // Update adaptive ranges
-    let dataMax = 0, devMax = 0
-    for (const c of buf.cols) {
-      for (let ch = 0; ch < nChannels; ch++) {
-        const v   = c.values[ch]
-        const dev = Math.abs(v - buf.ema[ch])
-        if (v   > dataMax) dataMax = v
-        if (dev > devMax)  devMax  = dev
+      // Update adaptive ranges
+      let dataMax = 0, devMax = 0
+      for (const c of buf.cols) {
+        for (let ch = 0; ch < nCh; ch++) {
+          const v   = c.values[ch]
+          const dev = Math.abs(v - buf.ema[ch])
+          if (v   > dataMax) dataMax = v
+          if (dev > devMax)  devMax  = dev
+        }
       }
-    }
-    if (dataMax > 0) {
-      buf.rangeMax = buf.rangeMax * 0.98 + dataMax * 0.02
-      if (dataMax > buf.rangeMax) buf.rangeMax = dataMax
-    }
-    if (devMax > 0) {
-      buf.devMax = buf.devMax * 0.98 + devMax * 0.02
-      if (devMax > buf.devMax) buf.devMax = devMax
-    }
-  }, [latestBatch, nChannels, windowSecs, emaAlpha])
+      if (dataMax > 0) {
+        buf.rangeMax = buf.rangeMax * 0.98 + dataMax * 0.02
+        if (dataMax > buf.rangeMax) buf.rangeMax = dataMax
+      }
+      if (devMax > 0) {
+        buf.devMax = buf.devMax * 0.98 + devMax * 0.02
+        if (devMax > buf.devMax) buf.devMax = devMax
+      }
+    })
+  }, [config.stream, config.field, registerDataHandler])
 
   // ------------------------------------------------------------------
   // Render loop (requestAnimationFrame)
@@ -156,9 +172,11 @@ export function HeatmapViewer({ config, latestBatch, windowSecs = 5 }: Props) {
 
     function render() {
       const { cols, ema, rangeMax, devMax } = bufRef.current
+      const nCh        = nChannelsRef.current
       const isDemeaned = demeandedRef.current
-      const W  = canvas!.width
-      const H  = canvas!.height
+      const winS       = windowSecsRef.current
+      const W   = canvas!.width
+      const H   = canvas!.height
       const lut = isDemeaned ? RDBU_LUT : PLASMA_LUT
 
       ctx.fillStyle = '#181825'
@@ -172,21 +190,27 @@ export function HeatmapViewer({ config, latestBatch, windowSecs = 5 }: Props) {
         return
       }
 
-      const nCols    = cols.length
-      const plotW    = W - 22        // leave right strip for color bar
-      const imgData  = ctx.createImageData(plotW, H)
-      const pixels   = imgData.data
+      // Only render the visible window — the buffer may hold much more history
+      const latest  = cols[cols.length - 1].ts
+      const cutoff  = latest - winS
+      let startIdx  = 0
+      while (startIdx < cols.length - 1 && cols[startIdx].ts < cutoff) startIdx++
+      const visibleCols = cols.slice(startIdx)
 
-      const scale    = isDemeaned ? (devMax > 0 ? devMax : 1) : (rangeMax > 0 ? rangeMax : 1)
+      const nCols   = visibleCols.length
+      const plotW   = W - 22        // leave right strip for color bar
+      const imgData = ctx.createImageData(plotW, H)
+      const pixels  = imgData.data
+
+      const scale = isDemeaned ? (devMax > 0 ? devMax : 1) : (rangeMax > 0 ? rangeMax : 1)
 
       for (let px = 0; px < plotW; px++) {
         const colIdx  = Math.floor((px / plotW) * nCols)
-        const colVals = cols[Math.min(colIdx, nCols - 1)].values
+        const colVals = visibleCols[Math.min(colIdx, nCols - 1)].values
 
-        for (let ch = 0; ch < nChannels; ch++) {
+        for (let ch = 0; ch < nCh; ch++) {
           let t: number
           if (isDemeaned) {
-            // Map deviation to [0,1]: 0=max-neg, 0.5=zero, 1=max-pos
             const dev = colVals[ch] - ema[ch]
             t = 0.5 + 0.5 * Math.max(-1, Math.min(1, dev / scale))
           } else {
@@ -225,9 +249,9 @@ export function HeatmapViewer({ config, latestBatch, windowSecs = 5 }: Props) {
       }
 
       // Channel axis labels
-      const labelEvery = Math.max(1, Math.floor(nChannels / 8))
+      const labelEvery = Math.max(1, Math.floor(nCh / 8))
       ctx.fillStyle = 'rgba(166, 173, 200, 0.65)'; ctx.font = '9px monospace'
-      for (let ch = 0; ch < nChannels; ch += labelEvery) {
+      for (let ch = 0; ch < nCh; ch += labelEvery) {
         ctx.fillText(`${ch}`, 2, ch * pxPerCh + pxPerCh)
       }
 

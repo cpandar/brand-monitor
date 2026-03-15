@@ -57,6 +57,8 @@ export interface ViewerConfig {
   id: string           // unique ID for React key
   stream: string
   field: string
+  /** Additional 1-channel fields overlaid as extra series in a timeseries viewer */
+  extraFields?: string[]
   viewerType: ViewerType
   fieldInfo: StreamFieldInfo
 }

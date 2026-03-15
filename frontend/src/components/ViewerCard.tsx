@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { DataBatch, ViewerConfig, ViewerType } from '../types'
 import { TimeSeriesViewer } from '../viewers/TimeSeriesViewer'
 import { RasterViewer } from '../viewers/RasterViewer'
@@ -28,16 +28,8 @@ const WINDOW_OPTIONS = [1, 2, 5, 10, 30]
 const DEFAULT_WINDOW_SECS = 5
 
 export function ViewerCard({ config, onRemove, onTypeChange, registerDataHandler }: Props) {
-  const [latestBatch, setLatestBatch] = useState<DataBatch | null>(null)
   const [showTypeMenu, setShowTypeMenu] = useState(false)
   const [windowSecs, setWindowSecs] = useState(DEFAULT_WINDOW_SECS)
-
-  useEffect(() => {
-    const unsub = registerDataHandler(config.stream, config.field, (batch) => {
-      setLatestBatch(batch)
-    })
-    return unsub
-  }, [config.stream, config.field, registerDataHandler])
 
   // Determine available viewer types for this signal
   const { dtype, n_channels } = config.fieldInfo
@@ -49,14 +41,18 @@ export function ViewerCard({ config, onRemove, onTypeChange, registerDataHandler
     return ['heatmap', 'raster', 'gauge']
   })()
 
+  // Build the title field label: "x+y+z" for multi-field, "/field" for single
+  const allFields = [config.field, ...(config.extraFields ?? [])]
+  const fieldLabel = allFields.join('+')
+
   function renderViewer() {
     switch (config.viewerType) {
       case 'timeseries':
-        return <TimeSeriesViewer config={config} latestBatch={latestBatch} windowSecs={windowSecs} />
+        return <TimeSeriesViewer config={config} registerDataHandler={registerDataHandler} windowSecs={windowSecs} />
       case 'raster':
-        return <RasterViewer config={config} latestBatch={latestBatch} windowSecs={windowSecs} />
+        return <RasterViewer config={config} registerDataHandler={registerDataHandler} windowSecs={windowSecs} />
       case 'heatmap':
-        return <HeatmapViewer config={config} latestBatch={latestBatch} windowSecs={windowSecs} />
+        return <HeatmapViewer config={config} registerDataHandler={registerDataHandler} windowSecs={windowSecs} />
       case 'scatter':
         return <PlaceholderViewer label="2D Scatter (coming soon)" />
       case 'gauge':
@@ -70,7 +66,7 @@ export function ViewerCard({ config, onRemove, onTypeChange, registerDataHandler
       <div style={styles.header}>
         <div style={styles.title}>
           <span style={styles.streamName}>{config.stream}</span>
-          <span style={styles.fieldName}>/{config.field}</span>
+          <span style={styles.fieldName}>/{fieldLabel}</span>
           <span style={styles.meta}>
             {config.fieldInfo.n_channels}ch · {config.fieldInfo.dtype} ·{' '}
             ~{config.fieldInfo.approx_rate_hz}Hz

@@ -40,31 +40,39 @@ interface Props {
 export function AddViewerDialog({ manifest, onAdd, onClose }: Props) {
   const streamNames = Object.keys(manifest)
   const [selectedStream, setSelectedStream] = useState(streamNames[0] ?? '')
+
   const fieldNames = selectedStream ? Object.keys(manifest[selectedStream] ?? {}) : []
-  const [selectedField, setSelectedField] = useState(fieldNames[0] ?? '')
 
-  const fieldInfo: StreamFieldInfo | null =
-    selectedStream && selectedField
-      ? manifest[selectedStream]?.[selectedField] ?? null
-      : null
+  // Multi-field mode: all fields are 1-channel — can overlay them in one time series chart
+  const allSingleChannel = fieldNames.length > 1 &&
+    fieldNames.every(f => (manifest[selectedStream]?.[f]?.n_channels ?? 0) === 1)
 
-  const compatible = fieldInfo ? compatibleViewers(fieldInfo) : []
+  const [selectedField,  setSelectedField]  = useState(fieldNames[0] ?? '')
+  const [checkedFields,  setCheckedFields]  = useState<string[]>(fieldNames)  // all pre-checked
+
   const [selectedViewer, setSelectedViewer] = useState<ViewerType>(
-    fieldInfo?.suggested_viewer ?? 'timeseries'
+    manifest[selectedStream]?.[fieldNames[0] ?? '']?.suggested_viewer ?? 'timeseries'
   )
 
-  // Reset field + viewer when stream changes
+  // Multi-select is only offered for timeseries when every field is 1-channel
+  const canMultiSelect = selectedViewer === 'timeseries' && allSingleChannel
+
+  // Primary field drives the fieldInfo used for viewer-type compatibility
+  const primaryField = canMultiSelect ? (checkedFields[0] ?? fieldNames[0]) : selectedField
+  const fieldInfo: StreamFieldInfo | null =
+    selectedStream && primaryField ? manifest[selectedStream]?.[primaryField] ?? null : null
+
+  const compatible = fieldInfo ? compatibleViewers(fieldInfo) : []
+
   function handleStreamChange(s: string) {
     setSelectedStream(s)
     const fields = Object.keys(manifest[s] ?? {})
     const f = fields[0] ?? ''
     setSelectedField(f)
-    if (f && manifest[s]?.[f]) {
-      setSelectedViewer(manifest[s][f].suggested_viewer)
-    }
+    setCheckedFields(fields)
+    if (f && manifest[s]?.[f]) setSelectedViewer(manifest[s][f].suggested_viewer)
   }
 
-  // Reset viewer when field changes
   function handleFieldChange(f: string) {
     setSelectedField(f)
     if (selectedStream && manifest[selectedStream]?.[f]) {
@@ -72,13 +80,22 @@ export function AddViewerDialog({ manifest, onAdd, onClose }: Props) {
     }
   }
 
+  function toggleCheckedField(f: string, checked: boolean) {
+    setCheckedFields(prev => {
+      const next = checked ? [...prev, f] : prev.filter(x => x !== f)
+      return next.length > 0 ? next : prev   // always keep at least one
+    })
+  }
+
   function handleAdd() {
     if (!fieldInfo) return
+    const fields = canMultiSelect ? checkedFields : [selectedField]
     onAdd({
-      stream: selectedStream,
-      field: selectedField,
-      viewerType: selectedViewer,
-      fieldInfo,
+      stream:      selectedStream,
+      field:       fields[0],
+      extraFields: fields.length > 1 ? fields.slice(1) : undefined,
+      viewerType:  selectedViewer,
+      fieldInfo:   manifest[selectedStream][fields[0]],
     })
     onClose()
   }
@@ -97,18 +114,40 @@ export function AddViewerDialog({ manifest, onAdd, onClose }: Props) {
           {streamNames.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
 
-        <label style={styles.label}>Field</label>
-        <select
-          style={styles.select}
-          value={selectedField}
-          onChange={e => handleFieldChange(e.target.value)}
-        >
-          {fieldNames.map(f => <option key={f} value={f}>{f}</option>)}
-        </select>
+        <label style={styles.label}>
+          {canMultiSelect ? 'Fields (select to overlay on one chart)' : 'Field'}
+        </label>
+
+        {canMultiSelect ? (
+          <div style={styles.fieldCheckboxes}>
+            {fieldNames.map(f => (
+              <label key={f} style={styles.fieldCheckboxRow}>
+                <input
+                  type="checkbox"
+                  checked={checkedFields.includes(f)}
+                  onChange={e => toggleCheckedField(f, e.target.checked)}
+                  style={{ accentColor: '#89b4fa', cursor: 'pointer' }}
+                />
+                <span style={styles.fieldCheckboxLabel}>{f}</span>
+              </label>
+            ))}
+          </div>
+        ) : (
+          <select
+            style={styles.select}
+            value={selectedField}
+            onChange={e => handleFieldChange(e.target.value)}
+          >
+            {fieldNames.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+        )}
 
         {fieldInfo && (
           <div style={styles.meta}>
-            {fieldInfo.n_channels} ch · {fieldInfo.dtype} · ~{fieldInfo.approx_rate_hz} Hz
+            {canMultiSelect
+              ? `${checkedFields.length} fields · ${fieldInfo.dtype} · ~${fieldInfo.approx_rate_hz} Hz each`
+              : `${fieldInfo.n_channels} ch · ${fieldInfo.dtype} · ~${fieldInfo.approx_rate_hz} Hz`
+            }
           </div>
         )}
 
@@ -133,7 +172,7 @@ export function AddViewerDialog({ manifest, onAdd, onClose }: Props) {
           <button
             style={styles.addBtn}
             onClick={handleAdd}
-            disabled={!fieldInfo}
+            disabled={!fieldInfo || (canMultiSelect && checkedFields.length === 0)}
           >
             Add
           </button>
@@ -160,6 +199,15 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 6, padding: '6px 10px', fontSize: 14,
   },
   meta: { color: '#6c7086', fontSize: 12 },
+  fieldCheckboxes: {
+    background: '#181825', border: '1px solid #45475a', borderRadius: 6,
+    padding: '6px 10px', display: 'flex', flexDirection: 'column', gap: 5,
+    maxHeight: 180, overflowY: 'auto',
+  },
+  fieldCheckboxRow: {
+    display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+  },
+  fieldCheckboxLabel: { color: '#cdd6f4', fontSize: 13, fontFamily: 'monospace' },
   viewerTypeRow: { display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 },
   typeBtn: {
     background: '#313244', color: '#a6adc8', border: '1px solid #45475a',
