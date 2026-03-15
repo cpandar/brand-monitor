@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { DataBatch, ViewerConfig } from '../types'
 
-const WINDOW_S = 5      // seconds of history
 const ROW_HEIGHT = 2    // pixels per channel row
 
 interface RasterEvent {
@@ -12,12 +11,15 @@ interface RasterEvent {
 interface Props {
   config: ViewerConfig
   latestBatch: DataBatch | null
+  windowSecs: number
 }
 
-export function RasterViewer({ config, latestBatch }: Props) {
+export function RasterViewer({ config, latestBatch, windowSecs }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const eventsRef = useRef<RasterEvent[]>([])
   const animFrameRef = useRef<number>(0)
+  const windowSecsRef = useRef<number>(windowSecs)
+  windowSecsRef.current = windowSecs
 
   const nChannels = config.fieldInfo.n_channels
   const canvasHeight = Math.max(80, nChannels * ROW_HEIGHT)
@@ -38,9 +40,9 @@ export function RasterViewer({ config, latestBatch }: Props) {
       }
     }
 
-    // Trim old events
+    // Trim old events beyond current window
     const now = latestBatch.timestamps[latestBatch.timestamps.length - 1]
-    const cutoff = now - WINDOW_S
+    const cutoff = now - windowSecsRef.current
     let i = 0
     while (i < events.length && events[i].ts < cutoff) i++
     if (i > 0) events.splice(0, i)
@@ -56,6 +58,7 @@ export function RasterViewer({ config, latestBatch }: Props) {
       const events = eventsRef.current
       const W = canvas!.width
       const H = canvas!.height
+      const windowS = windowSecsRef.current
 
       ctx.fillStyle = '#181825'
       ctx.fillRect(0, 0, W, H)
@@ -66,8 +69,8 @@ export function RasterViewer({ config, latestBatch }: Props) {
       }
 
       const now = events[events.length - 1].ts
-      const tStart = now - WINDOW_S
-      const tRange = WINDOW_S
+      const tStart = now - windowS
+      const tRange = windowS
 
       ctx.fillStyle = '#89b4fa'
       for (const ev of events) {

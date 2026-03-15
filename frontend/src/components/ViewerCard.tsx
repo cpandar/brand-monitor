@@ -54,7 +54,7 @@ export function ViewerCard({ config, onRemove, onTypeChange, registerDataHandler
       case 'timeseries':
         return <TimeSeriesViewer config={config} latestBatch={latestBatch} windowSecs={windowSecs} />
       case 'raster':
-        return <RasterViewer config={config} latestBatch={latestBatch} />
+        return <RasterViewer config={config} latestBatch={latestBatch} windowSecs={windowSecs} />
       case 'heatmap':
         return <HeatmapViewer config={config} latestBatch={latestBatch} windowSecs={windowSecs} />
       case 'scatter':
@@ -77,8 +77,8 @@ export function ViewerCard({ config, onRemove, onTypeChange, registerDataHandler
           </span>
         </div>
         <div style={styles.controls}>
-          {/* Timescale selector — relevant for time series and heatmap */}
-          {(config.viewerType === 'timeseries' || config.viewerType === 'heatmap') && (
+          {/* Timescale selector — relevant for time series, raster, and heatmap */}
+          {(config.viewerType === 'timeseries' || config.viewerType === 'raster' || config.viewerType === 'heatmap') && (
             <select
               style={styles.windowSelect}
               value={windowSecs}

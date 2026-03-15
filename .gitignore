@@ -1,2 +1,6 @@
 frontend/node_modules/
 nodes/signal_visualizer/git_hash.o
+
+# macOS metadata
+.DS_Store
+**/.DS_Store
